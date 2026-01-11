@@ -1,21 +1,17 @@
-class Player:
-    def __init__(self, name, score=0):
+class player:
+    def __init__(self, name):
         self.name = name
-        self.score = score
         self.hand = []
 
-    def update_score(self, points):
-        self.score += points
-
     def get_info(self):
-        return f"Player: {self.name}, Score: {self.score}"
+        return f"Player: {self.name}, Score: {self.calculate_hand_value()}, Cards: {self.show_hand()}"
     
     def receive_card(self, card):
-        self.update_score(card.value())
         self.hand.append(card)
     
     def is_busted(self):
-        return self.score > 21
+        score = self.calculate_hand_value()
+        return score > 21
     
     def get_total_cards(self):
         return len(self.hand)
@@ -25,4 +21,16 @@ class Player:
     
     def reset_hand(self):
         self.hand = []
-        self.score = 0
+    
+    def calculate_hand_value(self):
+        total = 0
+        aces = 0
+        for card in self.hand:
+            val = card.value()
+            total += val
+            if card.rank == 'Ace':
+                aces += 1
+        while total > 21 and aces:
+            total -= 10
+            aces -= 1
+        return total
