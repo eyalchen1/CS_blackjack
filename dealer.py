@@ -1,4 +1,8 @@
-class dealer(player):
+
+from player import player
+
+# --- Dealer Class (Inherits from Player) ---
+class Dealer(player):
     def __init__(self, name="Dealer"):
         super().__init__(name)
 
@@ -14,6 +18,11 @@ class dealer(player):
         while self.should_hit():
             card = deck.deal()
             if card:
+                print(f"{self.name} hits and gets {card}")
                 self.receive_card(card)
             else:
                 break
+        if self.is_busted():
+            print(f"{self.name} busted!")
+        else:
+            print(f"{self.name} stands.")
