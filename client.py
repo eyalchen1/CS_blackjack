@@ -1,6 +1,6 @@
 import socket
 import struct
-import time
+import sys # Added for flush
 from game_utils import *
 
 # --- Config ---
@@ -27,105 +27,117 @@ def net_to_card(r, s):
 
 def start_client():
     try:
-        rounds = int(input("How many rounds to play? "))
-    except: 
-        rounds = 1
+        rounds = int(input(f"{bcolors.BOLD}How many rounds to play? {bcolors.ENDC}"))
+    except: rounds = 1
 
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     udp.bind(('', UDP_PORT))
-    print("Client started, listening for offer requests...")
+    
+    # --- VITAL: Timeout for UDP so Ctrl+C works while waiting ---
+    udp.settimeout(1.0)
+    
+    print(f"{bcolors.BLUE}Client started, listening for offer requests...{bcolors.ENDC}")
     
     server_ip = None
     server_port = None
-    while True:
-        data, addr = udp.recvfrom(1024)
-        if len(data) < 39: continue
-        cookie, mtype, port, name_b = struct.unpack("!IbH32s", data[:39])
-        if cookie == MAGIC_COOKIE and mtype == OFFER_TYPE:
-            server_ip = addr[0]
-            server_port = port
-            s_name = name_b.decode().strip('\x00')
-            print(f"Received offer from {s_name} at {server_ip}")
-            break
     
-    udp.close()
+    while True:
+        try:
+            data, addr = udp.recvfrom(1024)
+            if len(data) < 39: continue
+            cookie, mtype, port, name_b = struct.unpack("!IbH32s", data[:39])
+            if cookie == MAGIC_COOKIE and mtype == OFFER_TYPE:
+                server_ip = addr[0]
+                server_port = port
+                s_name = name_b.decode().strip('\x00')
+                print(f"Received offer from {bcolors.CYAN}{s_name}{bcolors.ENDC} at {server_ip}")
+                break
+        except socket.timeout:
+            # Just loop back to check for Ctrl+C
+            pass
+    
+    udp.close() # Close UDP before moving to TCP
     
     try:
         conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         conn.connect((server_ip, server_port))
+        
+        # --- Safety Timeout: If server dies, don't hang forever ---
+        conn.settimeout(15.0) 
+        
         conn.sendall(struct.pack("!IbB32s", MAGIC_COOKIE, REQUEST_TYPE, rounds, TEAM_NAME.encode().ljust(32, b'\x00')))
         
         wins = 0
         for r in range(1, rounds + 1):
-            print(f"\n--- Round {r} ---")
+            print(f"\n{bcolors.HEADER}--- Round {r} ---{bcolors.ENDC}")
             
-            my_p = player("Me") # Local tracker for display
+            my_p = player("Me") 
             cards_seen = 0
             
-            # FLAG: Are we currently making decisions?
             my_turn = True 
             round_over = False
 
             while not round_over:
-                data = conn.recv(9)
+                try:
+                    data = conn.recv(9) 
+                except socket.timeout:
+                    print(f"{bcolors.FAIL}Server timed out. Game over.{bcolors.ENDC}")
+                    return
+
                 if not data: 
                     print("Connection closed by server")
-                    break
+                    return
                 
                 cookie, mtype, res, rank, suit = struct.unpack("!IbBHB", data)
                 
                 if res != MSG_ONGOING:
-                    # End of round logic
-                    if rank != 0: # If a card came with the result (e.g. bust card)
+                    if rank != 0: 
                         c_obj = net_to_card(rank, suit)
                         my_p.receive_card(c_obj)
                         print(f"You got: {c_obj}")
                     
                     if res == MSG_WIN: 
-                        print(f"{bcolors.GREEN}You Won!{bcolors.ENDC}")
+                        print(f"{bcolors.GREEN}{bcolors.BOLD}You Won!{bcolors.ENDC}")
                         wins += 1
                     elif res == MSG_LOSS: 
-                        print(f"{bcolors.FAIL}You Lost!{bcolors.ENDC}")
+                        print(f"{bcolors.FAIL}{bcolors.BOLD}You Lost!{bcolors.ENDC}")
                     else: 
-                        print(f"{bcolors.WARNING}It's a Tie!{bcolors.ENDC}")
+                        print(f"{bcolors.WARNING}{bcolors.BOLD}It's a Tie!{bcolors.ENDC}")
                     round_over = True
                     continue
 
-                # Normal card received
                 c_obj = net_to_card(rank, suit)
                 cards_seen += 1
                 
-                # Display logic
                 if cards_seen <= 2:
                     my_p.receive_card(c_obj)
                     print(f"You got: {c_obj}")
                 elif cards_seen == 3:
                     print(f"Dealer shows: {c_obj}")
                 elif cards_seen == 4 and not my_turn:
-                    # This is the dealer's hidden card being revealed
                     print(f"Dealer reveals: {c_obj}")
                 else:
-                    # If it's my turn, it's my card. If I stood, it's dealer's card.
                     if my_turn:
                         my_p.receive_card(c_obj)
                         print(f"You got: {c_obj}")
                     else:
                         print(f"Dealer draws: {c_obj}")
 
-                # Show Score if it's my turn
                 if my_turn and cards_seen >= 2:
-                    print(f"Your Hand Value: {my_p.calculate_hand_value()}")
+                    print(f"Your Hand Value: {bcolors.BOLD}{my_p.calculate_hand_value()}{bcolors.ENDC}")
                 
-                # Decision Point
                 if cards_seen >= 3 and my_turn:
-                    choice = input("Action (hit/stand): ").strip().lower()
+                    # Force print to appear immediately
+                    print(f"Action ({bcolors.GREEN}hit{bcolors.ENDC}/{bcolors.FAIL}stand{bcolors.ENDC}): ", end='', flush=True)
+                    choice = sys.stdin.readline().strip().lower()
+                    
                     if choice == 'hit':
                         conn.sendall(struct.pack("!Ib5s", MAGIC_COOKIE, PAYLOAD_TYPE, b"Hittt"))
                     else:
                         conn.sendall(struct.pack("!Ib5s", MAGIC_COOKIE, PAYLOAD_TYPE, b"Stand"))
-                        my_turn = False # STOP ASKING FOR INPUT
-                        print("You stand. Waiting for dealer...")
+                        my_turn = False 
+                        print(f"{bcolors.WARNING}Waiting for dealer...{bcolors.ENDC}")
 
         print(f"\n{bcolors.BOLD}Finished playing {rounds} rounds, win rate: {wins/rounds:.2%}{bcolors.ENDC}")
         conn.close()
@@ -137,7 +149,7 @@ def main():
     while True:
         try:
             start_client()
-            time.sleep(2)  # Brief pause before restarting
+            time.sleep(2)  
         except KeyboardInterrupt:
             print(f"\n{bcolors.WARNING}Game terminated by user. Goodbye!{bcolors.ENDC}")
             break
