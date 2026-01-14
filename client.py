@@ -1,6 +1,7 @@
 import socket
 import struct
-import sys # Added for flush
+import sys
+import time
 from game_utils import *
 
 # --- Config ---
@@ -27,21 +28,37 @@ def net_to_card(r, s):
 
 def start_client():
     try:
-        rounds = int(input(f"{bcolors.BOLD}How many rounds to play? {bcolors.ENDC}"))
-    except: rounds = 1
+        # Prompt for rounds
+        print(f"{bcolors.BOLD}How many rounds to play? (Enter 0 to quit): {bcolors.ENDC}", end='', flush=True)
+        rounds_input = sys.stdin.readline().strip()
+        
+        if not rounds_input:
+            rounds = 1
+        else:
+            rounds = int(rounds_input)
+            
+        # --- EXIT CONDITION ---
+        if rounds == 0:
+            print("Exiting game. Goodbye!")
+            return False # Signal to main loop to stop
+            
+    except ValueError: 
+        print(f"{bcolors.WARNING}Invalid input. Defaulting to 1 round.{bcolors.ENDC}")
+        rounds = 1
 
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     udp.bind(('', UDP_PORT))
     
-    # --- VITAL: Timeout for UDP so Ctrl+C works while waiting ---
+    # Timeout for UDP so we can check for Ctrl+C
     udp.settimeout(1.0)
     
-    print(f"{bcolors.BLUE}Client started, listening for offer requests...{bcolors.ENDC}")
+    print(f"\n{bcolors.BLUE}Client started, listening for offer requests...{bcolors.ENDC}")
     
     server_ip = None
     server_port = None
     
+    # UDP Listening Loop
     while True:
         try:
             data, addr = udp.recvfrom(1024)
@@ -54,19 +71,25 @@ def start_client():
                 print(f"Received offer from {bcolors.CYAN}{s_name}{bcolors.ENDC} at {server_ip}")
                 break
         except socket.timeout:
-            # Just loop back to check for Ctrl+C
-            pass
+            pass # Loop back to allow Ctrl+C check
+        except KeyboardInterrupt:
+            return False
     
-    udp.close() # Close UDP before moving to TCP
+    udp.close()
     
+    # TCP Connection
     try:
         conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         conn.connect((server_ip, server_port))
         
-        # --- Safety Timeout: If server dies, don't hang forever ---
+        # --- VALIDATION: Confirm connection ---
+        print(f"{bcolors.GREEN}TCP connection established successfully with {server_ip}:{server_port}{bcolors.ENDC}")
+        
         conn.settimeout(15.0) 
         
+        # Send Request
         conn.sendall(struct.pack("!IbB32s", MAGIC_COOKIE, REQUEST_TYPE, rounds, TEAM_NAME.encode().ljust(32, b'\x00')))
+        conn.sendall(b'\n') # Requirement mentions a line break
         
         wins = 0
         for r in range(1, rounds + 1):
@@ -74,7 +97,6 @@ def start_client():
             
             my_p = player("Me") 
             cards_seen = 0
-            
             my_turn = True 
             round_over = False
 
@@ -83,15 +105,16 @@ def start_client():
                     data = conn.recv(9) 
                 except socket.timeout:
                     print(f"{bcolors.FAIL}Server timed out. Game over.{bcolors.ENDC}")
-                    return
+                    return True
 
                 if not data: 
                     print("Connection closed by server")
-                    return
+                    return True
                 
                 cookie, mtype, res, rank, suit = struct.unpack("!IbBHB", data)
                 
                 if res != MSG_ONGOING:
+                    # Round ended (Win/Loss/Tie)
                     if rank != 0: 
                         c_obj = net_to_card(rank, suit)
                         my_p.receive_card(c_obj)
@@ -107,6 +130,7 @@ def start_client():
                     round_over = True
                     continue
 
+                # Ongoing game card received
                 c_obj = net_to_card(rank, suit)
                 cards_seen += 1
                 
@@ -127,8 +151,8 @@ def start_client():
                 if my_turn and cards_seen >= 2:
                     print(f"Your Hand Value: {bcolors.BOLD}{my_p.calculate_hand_value()}{bcolors.ENDC}")
                 
+                # Player Action
                 if cards_seen >= 3 and my_turn:
-                    # Force print to appear immediately
                     print(f"Action ({bcolors.GREEN}hit{bcolors.ENDC}/{bcolors.FAIL}stand{bcolors.ENDC}): ", end='', flush=True)
                     choice = sys.stdin.readline().strip().lower()
                     
@@ -139,24 +163,33 @@ def start_client():
                         my_turn = False 
                         print(f"{bcolors.WARNING}Waiting for dealer...{bcolors.ENDC}")
 
-        print(f"\n{bcolors.BOLD}Finished playing {rounds} rounds, win rate: {wins/rounds:.2%}{bcolors.ENDC}")
+        # Summary
+        if rounds > 0:
+            print(f"\n{bcolors.BOLD}Finished playing {rounds} rounds, win rate: {wins/rounds:.2%}{bcolors.ENDC}")
+        else:
+            print("\nNo rounds played.")
+            
         conn.close()
+        return True # Continue main loop
         
     except Exception as e:
         print(f"{bcolors.FAIL}Error: {e}{bcolors.ENDC}")
+        return True # Continue main loop
 
 def main():
     while True:
         try:
-            start_client()
-            time.sleep(2)  
+            # If start_client returns False, it means user wants to quit
+            should_continue = start_client()
+            if not should_continue:
+                break
+            time.sleep(1)
         except KeyboardInterrupt:
             print(f"\n{bcolors.WARNING}Game terminated by user. Goodbye!{bcolors.ENDC}")
             break
         except Exception as e:
             print(f"\n{bcolors.FAIL}Unexpected error: {e}{bcolors.ENDC}")
-            print("Restarting client in 3 seconds...")
-            time.sleep(3)
+            break
 
 if __name__ == "__main__":
     main()

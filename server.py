@@ -44,7 +44,6 @@ def send_result(sock, result_code):
 def handle_client(conn, addr):
     print(f"{bcolors.BLUE}Connected to {addr}{bcolors.ENDC}")
     try:
-        # Set a timeout for the game connection too, so dead clients don't hang threads forever
         conn.settimeout(60.0) 
 
         # 1. Handshake
@@ -59,7 +58,7 @@ def handle_client(conn, addr):
         wins = 0
 
         # 2. Game Loop
-        for r in range(1, rounds+1):
+        for r in range(1, rounds + 1):
             print(f"{bcolors.HEADER}Round {r} starting for {team_name}{bcolors.ENDC}")
             
             current_deck = deck()
@@ -132,6 +131,12 @@ def handle_client(conn, addr):
                     send_result(conn, MSG_TIE)
 
             print(f"Round {r} done.")
+        
+        # --- FIXED: Prevent Division by Zero if rounds is 0 ---
+        if rounds > 0:
+            print(f"Client {team_name} finished {rounds} rounds with {wins} wins ({wins/rounds:.2%} win rate)")
+        else:
+            print(f"Client {team_name} disconnected without playing.")
             
     except Exception as e:
         print(f"{bcolors.FAIL}Error: {e}{bcolors.ENDC}")
@@ -150,14 +155,11 @@ def udp_broadcast():
     print(f"{bcolors.GREEN}Server started, listening on IP address {ip}{bcolors.ENDC}")
     msg = struct.pack("!IbH32s", MAGIC_COOKIE, OFFER_TYPE, TCP_PORT, SERVER_NAME.encode().ljust(32, b'\x00'))
     
-    # Broadcast loop does not block recv, so it is naturally responsive to Ctrl+C
-    # provided we use time.sleep
     while True:
         sock.sendto(msg, ('<broadcast>', UDP_PORT))
         time.sleep(1)
 
 if __name__ == "__main__":
-    # Daemon thread ensures it dies when main thread dies
     t = threading.Thread(target=udp_broadcast, daemon=True)
     t.start()
     
@@ -165,8 +167,6 @@ if __name__ == "__main__":
     tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     tcp.bind(("0.0.0.0", TCP_PORT))
     tcp.listen()
-    
-    # --- VITAL: Set timeout to allow Ctrl+C to work ---
     tcp.settimeout(1.0) 
     
     print(f"TCP server listening on port {TCP_PORT}")
@@ -177,8 +177,6 @@ if __name__ == "__main__":
                 c, a = tcp.accept()
                 threading.Thread(target=handle_client, args=(c, a), daemon=True).start()
             except socket.timeout:
-                # This exception happens every 1 second. 
-                # It just wakes up the loop so it can check for KeyboardInterrupt.
                 pass
             except Exception as e:
                 print(f"Server Error: {e}")
