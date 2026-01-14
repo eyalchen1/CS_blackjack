@@ -2,6 +2,7 @@ import socket
 import struct
 import sys
 import time
+# Ensure game_utils.py is in the same directory
 from game_utils import *
 
 # --- Config ---
@@ -19,12 +20,20 @@ MSG_ONGOING = 0x0
 SUIT_MAP = ['Hearts', 'Diamonds', 'Clubs', 'Spades']
 
 def net_to_card(r, s):
+    # Convert protocol rank to string
     if r == 1: rank_str = 'Ace'
     elif r == 11: rank_str = 'Jack'
     elif r == 12: rank_str = 'Queen'
     elif r == 13: rank_str = 'King'
     else: rank_str = str(r)
-    return card(rank_str, SUIT_MAP[s])
+    
+    # --- FIX: s is 1-4, but list index is 0-3 ---
+    if 1 <= s <= 4:
+        suit_str = SUIT_MAP[s-1]
+    else:
+        suit_str = "Unknown"
+        
+    return card(rank_str, suit_str)
 
 def start_client():
     try:
@@ -102,6 +111,7 @@ def start_client():
 
             while not round_over:
                 try:
+                    # Expecting exactly 9 bytes for a message
                     data = conn.recv(9) 
                 except socket.timeout:
                     print(f"{bcolors.FAIL}Server timed out. Game over.{bcolors.ENDC}")
@@ -113,8 +123,9 @@ def start_client():
                 
                 cookie, mtype, res, rank, suit = struct.unpack("!IbBHB", data)
                 
+                # --- CASE 1: Game Over (Win/Loss/Tie) ---
                 if res != MSG_ONGOING:
-                    # Round ended (Win/Loss/Tie)
+                    # If server sent a card along with the result (e.g., the bust card)
                     if rank != 0: 
                         c_obj = net_to_card(rank, suit)
                         my_p.receive_card(c_obj)
@@ -127,10 +138,11 @@ def start_client():
                         print(f"{bcolors.FAIL}{bcolors.BOLD}You Lost!{bcolors.ENDC}")
                     else: 
                         print(f"{bcolors.WARNING}{bcolors.BOLD}It's a Tie!{bcolors.ENDC}")
+                    
                     round_over = True
-                    continue
+                    continue # Break inner loop, go to next round in for loop
 
-                # Ongoing game card received
+                # --- CASE 2: Ongoing Game (Receive Card) ---
                 c_obj = net_to_card(rank, suit)
                 cards_seen += 1
                 
@@ -151,17 +163,22 @@ def start_client():
                 if my_turn and cards_seen >= 2:
                     print(f"Your Hand Value: {bcolors.BOLD}{my_p.calculate_hand_value()}{bcolors.ENDC}")
                 
-                # Player Action
+                # --- Player Decision ---
                 if cards_seen >= 3 and my_turn:
-                    print(f"Action ({bcolors.GREEN}hit{bcolors.ENDC}/{bcolors.FAIL}stand{bcolors.ENDC}): ", end='', flush=True)
-                    choice = sys.stdin.readline().strip().lower()
-                    
-                    if choice == 'hit':
-                        conn.sendall(struct.pack("!Ib5s", MAGIC_COOKIE, PAYLOAD_TYPE, b"Hittt"))
+                    # Check if we didn't just bust on the received card
+                    if my_p.calculate_hand_value() > 21:
+                         # We rely on server to send the Loss message next, so we don't ask for input
+                         pass 
                     else:
-                        conn.sendall(struct.pack("!Ib5s", MAGIC_COOKIE, PAYLOAD_TYPE, b"Stand"))
-                        my_turn = False 
-                        print(f"{bcolors.WARNING}Waiting for dealer...{bcolors.ENDC}")
+                        print(f"Action ({bcolors.GREEN}hit{bcolors.ENDC}/{bcolors.FAIL}stand{bcolors.ENDC}): ", end='', flush=True)
+                        choice = sys.stdin.readline().strip().lower()
+                        
+                        if choice == 'hit':
+                            conn.sendall(struct.pack("!Ib5s", MAGIC_COOKIE, PAYLOAD_TYPE, b"Hittt"))
+                        else:
+                            conn.sendall(struct.pack("!Ib5s", MAGIC_COOKIE, PAYLOAD_TYPE, b"Stand"))
+                            my_turn = False 
+                            print(f"{bcolors.WARNING}Waiting for dealer...{bcolors.ENDC}")
 
         # Summary
         if rounds > 0:
