@@ -1,5 +1,6 @@
 import socket
 import struct
+import time
 from game_utils import *
 
 # --- Config ---
@@ -15,6 +16,7 @@ MSG_TIE = 0x1
 MSG_ONGOING = 0x0
 
 SUIT_MAP = ['Hearts', 'Diamonds', 'Clubs', 'Spades']
+
 def net_to_card(r, s):
     if r == 1: rank_str = 'Ace'
     elif r == 11: rank_str = 'Jack'
@@ -26,7 +28,8 @@ def net_to_card(r, s):
 def start_client():
     try:
         rounds = int(input("How many rounds to play? "))
-    except: rounds = 1
+    except: 
+        rounds = 1
 
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -46,6 +49,8 @@ def start_client():
             print(f"Received offer from {s_name} at {server_ip}")
             break
     
+    udp.close()
+    
     try:
         conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         conn.connect((server_ip, server_port))
@@ -63,8 +68,10 @@ def start_client():
             round_over = False
 
             while not round_over:
-                data = conn.recv(9) # Header + payload (1+1+1+2+1 = 6 bytes? No, struct format: I(4) b(1) B(1) H(2) B(1) = 9 bytes)
-                if not data: break
+                data = conn.recv(9)
+                if not data: 
+                    print("Connection closed by server")
+                    break
                 
                 cookie, mtype, res, rank, suit = struct.unpack("!IbBHB", data)
                 
@@ -76,12 +83,12 @@ def start_client():
                         print(f"You got: {c_obj}")
                     
                     if res == MSG_WIN: 
-                        print("You Won!")
+                        print(f"{bcolors.GREEN}You Won!{bcolors.ENDC}")
                         wins += 1
                     elif res == MSG_LOSS: 
-                        print("You Lost!")
+                        print(f"{bcolors.FAIL}You Lost!{bcolors.ENDC}")
                     else: 
-                        print("It's a Tie!")
+                        print(f"{bcolors.WARNING}It's a Tie!{bcolors.ENDC}")
                     round_over = True
                     continue
 
@@ -95,22 +102,22 @@ def start_client():
                     print(f"You got: {c_obj}")
                 elif cards_seen == 3:
                     print(f"Dealer shows: {c_obj}")
+                elif cards_seen == 4 and not my_turn:
+                    # This is the dealer's hidden card being revealed
+                    print(f"Dealer reveals: {c_obj}")
                 else:
                     # If it's my turn, it's my card. If I stood, it's dealer's card.
                     if my_turn:
                         my_p.receive_card(c_obj)
                         print(f"You got: {c_obj}")
                     else:
-                        print(f"Dealer dealt: {c_obj}")
+                        print(f"Dealer draws: {c_obj}")
 
                 # Show Score if it's my turn
                 if my_turn and cards_seen >= 2:
                     print(f"Your Hand Value: {my_p.calculate_hand_value()}")
                 
                 # Decision Point
-                # 1. We must have seen initial cards (2 mine + 1 dealer = 3 total)
-                # 2. It must be my turn
-                # 3. We must not be busted (handled by server sending result code, but good to check)
                 if cards_seen >= 3 and my_turn:
                     choice = input("Action (hit/stand): ").strip().lower()
                     if choice == 'hit':
@@ -118,20 +125,26 @@ def start_client():
                     else:
                         conn.sendall(struct.pack("!Ib5s", MAGIC_COOKIE, PAYLOAD_TYPE, b"Stand"))
                         my_turn = False # STOP ASKING FOR INPUT
-                        print("Waiting for dealer...")
+                        print("You stand. Waiting for dealer...")
 
-        print(f"\nFinished playing {rounds} rounds, win rate: {wins/rounds}")
+        print(f"\n{bcolors.BOLD}Finished playing {rounds} rounds, win rate: {wins/rounds:.2%}{bcolors.ENDC}")
         conn.close()
-        start_client()
         
     except Exception as e:
-        print(f"Error: {e}")
-        start_client()
+        print(f"{bcolors.FAIL}Error: {e}{bcolors.ENDC}")
+
+def main():
+    while True:
+        try:
+            start_client()
+            time.sleep(2)  # Brief pause before restarting
+        except KeyboardInterrupt:
+            print(f"\n{bcolors.WARNING}Game terminated by user. Goodbye!{bcolors.ENDC}")
+            break
+        except Exception as e:
+            print(f"\n{bcolors.FAIL}Unexpected error: {e}{bcolors.ENDC}")
+            print("Restarting client in 3 seconds...")
+            time.sleep(3)
 
 if __name__ == "__main__":
-    try:
-        start_client()
-    except KeyboardInterrupt:
-        print(f"\n{bcolors.WARNING}Game terminated by user. Goodbye!{bcolors.ENDC}")
-    except Exception as e:
-        print(f"\n{bcolors.FAIL}Unexpected error: {e}{bcolors.ENDC}")
+    main()
